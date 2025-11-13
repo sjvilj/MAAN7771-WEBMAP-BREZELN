@@ -1,0 +1,1246 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1,width=device-width">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <link rel="stylesheet" href="css/leaflet.css">
+        <link rel="stylesheet" href="css/qgis2web.css">
+        <link rel="stylesheet" href="css/fontawesome-all.min.css">
+        <link rel="stylesheet" href="css/leaflet.photon.css">
+		
+		<!--custom libraries added manually: betterscale, locate and intro -->
+		<link rel="stylesheet" href="css/L.Control.BetterScale.css">
+		<link rel="stylesheet" href="css/L.Control.Locate.min.css">
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/intro.js/minified/introjs.min.css">
+        <style>
+		
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+        </style>
+        <title>Healthcare accessibility in Southwest Finland</title>
+    </head>
+    <body>
+	
+		<!-- Preloader modiefied from https://www.jobsity.com/blog/how-to-create-a-full-screen-preloader-without-any-library -->
+		<div class="preloader">
+		  <img src="images/brezeln.png" alt="Brezeln logo">
+		  <p>Loading map...</p>
+		</div>
+
+		<style>
+		.preloader {
+		  align-items: center;
+		  background: #FFF;
+		  display: flex;
+		  flex-direction: column;
+		  height: 100vh;
+		  justify-content: center;
+		  left: 0;
+		  position: fixed;
+		  top: 0;
+		  transition: opacity 0.2s linear;
+		  width: 100%;
+		  z-index: 9999;
+		  opacity: 1;
+		}
+
+		/*this makes the image to spin around*/
+		.preloader img {
+		  width: 130px;
+		  height: 130px;
+		  animation: spin 2.5s linear infinite;
+		  transform-origin: 50% 50%;
+		}
+
+		@keyframes spin {
+		  from { transform: rotate(0deg); }
+		  to   { transform: rotate(360deg); }
+		}
+		</style>
+
+		<script>
+		// When the page is loaded the loading screen fade out (modified https://www.jobsity.com/blog/how-to-create-a-full-screen-preloader-without-any-library)
+		window.addEventListener('load', function() {
+		  const preloader = document.querySelector('.preloader');
+		  const fadeEffect = setInterval(() => {
+			if (!preloader.style.opacity) {
+			  preloader.style.opacity = 1;
+			}
+			if (preloader.style.opacity > 0) {
+			  preloader.style.opacity -= 0.1;
+			} else {
+			  clearInterval(fadeEffect);
+			  preloader.style.display = 'none';
+			}
+		  }, 50); // how fast the fade out happens
+		});
+		</script>
+			
+	
+	
+	
+        <div id="map">
+        </div>
+        <script src="js/qgis2web_expressions.js"></script>
+        <script src="js/leaflet.js"></script>
+        <script src="js/leaflet.rotatedMarker.js"></script>
+        <script src="js/leaflet.pattern.js"></script>
+        <script src="js/leaflet-hash.js"></script>
+        <script src="js/Autolinker.min.js"></script>
+        <script src="js/rbush.min.js"></script>
+        <script src="js/labelgun.min.js"></script>
+        <script src="js/labels.js"></script>
+        <script src="js/leaflet.photon.js"></script>
+        <script src="data/Healthcentersbycar_2.js"></script>
+        <script src="data/Healthcentersbywalking_3.js"></script>
+        <script src="data/Hospitalsbywalking_4.js"></script>
+        <script src="data/Hospitalsbycar_5.js"></script>
+        <script src="data/Hospitals_6.js"></script>
+        <script src="data/Healthcenters_7.js"></script>
+		
+		<script src="js/L.Control.BetterScale.js"></script> //betterscale
+		<script src="js/L.Control.Locate.min.js"></script> //locate me
+		<script src="https://cdn.jsdelivr.net/npm/intro.js/minified/intro.min.js"></script> // tutorial imported via cdn link (with help of chatgpt)
+        <script>
+		
+		
+        var highlightLayer;
+        function highlightFeature(e) {
+            highlightLayer = e.target;
+
+            if (e.target.feature.geometry.type === 'LineString' || e.target.feature.geometry.type === 'MultiLineString') {
+              highlightLayer.setStyle({
+                color: '#ffff00',
+              });
+            } else {
+              highlightLayer.setStyle({
+                fillColor: '#ffff00',
+                fillOpacity: 1
+              });
+            }
+        }
+        var map = L.map('map', {
+            zoomControl:false, maxZoom:20, minZoom:8  // controls max and min zoomlevels
+        })
+
+
+
+	
+		//locate user button (https://github.com/domoritz/leaflet-locatecontrol)
+		L.control.locate({
+			position: 'topleft',
+			strings: {
+				title: "Show my location"
+			},
+			locateOptions: {
+				enableHighAccuracy: true,
+				maxZoom: 12
+			}
+		}).addTo(map);
+
+
+		// better scales
+		L.control.betterscale({
+			metric: true,
+			imperial: false,
+			maxWidth: 150,
+			position: 'bottomleft',
+		}).addTo(map);
+		
+		
+		
+		// Custom icons for hospitals and health centers (https://leafletjs.com/examples/custom-icons/)
+		var hospitalIcon = L.icon({
+			iconUrl: 'markers/hospital.png',
+			iconSize: [25, 25],
+			iconAnchor: [12.5, 25],
+			popupAnchor: [0, -30]
+		});
+		var healthCenterIcon = L.icon({
+			iconUrl: 'markers/healthcenter.png',
+			iconSize: [25, 25],
+			iconAnchor: [12.5, 25],
+			popupAnchor: [0, -30]
+		});
+		
+		
+		// Enlarges hospital and health center icons on hover
+		function enlargeicons(layer) {
+			layer.on('mouseover', function(e) {
+				e.target.setIcon(L.icon({
+					iconUrl: e.target.options.icon.options.iconUrl,
+					iconSize: [35, 35],      // larger icon
+					iconAnchor: [17.5, 35],
+					popupAnchor: [0, -33]
+				}));
+			});
+			layer.on('mouseout', function(e) {
+				e.target.setIcon(L.icon({
+					iconUrl: e.target.options.icon.options.iconUrl,
+					iconSize: [25, 25],      // back to original settings
+					iconAnchor: [12.5, 25],
+					popupAnchor: [0, -30]
+				}));
+			});
+		}
+	
+	
+        var hash = new L.Hash(map);
+		map.attributionControl.setPrefix(
+		  '<a href="https://github.com/tomchadwin/qgis2web" target="_blank">qgis2web</a> &middot; ' +
+		  '<a href="https://leafletjs.com" title="A JS library for interactive maps" target="_blank">Leaflet</a> &middot; ' +
+		  '<a href="https://qgis.org" target="_blank">QGIS</a> &middot; ' +
+		  '<a href="https://github.com/daniellsu/leaflet-betterscale" target="_blank">Leaflet.BetterScale</a> &middot; ' +
+		  '<a href="https://github.com/domoritz/leaflet-locatecontrol" target="_blank">Leaflet.LocateControl</a> &middot; ' +
+		  '<a href="https://introjs.com/" target="_blank">Intro.js</a>'
+		);
+		
+        var autolinker = new Autolinker({truncate: {length: 30, location: 'smart'}});
+
+        function removeEmptyRowsFromPopupContent(content, feature) {
+         var tempDiv = document.createElement('div');
+         tempDiv.innerHTML = content;
+         var rows = tempDiv.querySelectorAll('tr');
+         for (var i = 0; i < rows.length; i++) {
+             var td = rows[i].querySelector('td.visible-with-data');
+             var key = td ? td.id : '';
+             if (td && td.classList.contains('visible-with-data') && feature.properties[key] == null) {
+                 rows[i].parentNode.removeChild(rows[i]);
+             }
+         }
+         return tempDiv.innerHTML;
+        }
+		
+        // modify popup if contains media
+        function addClassToPopupIfMedia(content, popup) {
+            var tempDiv = document.createElement('div');
+            tempDiv.innerHTML = content;
+            var imgTd = tempDiv.querySelector('td img');
+            if (imgTd) {
+                var src = imgTd.getAttribute('src');
+                if (/\.(jpg|jpeg|png|gif|bmp|webp|avif)$/i.test(src)) {
+                    popup._contentNode.classList.add('media');
+                    setTimeout(function() {
+                        popup.update();
+                    }, 10);
+                } else if (/\.(mp3|wav|ogg|aac)$/i.test(src)) {
+                    var audio = document.createElement('audio');
+                    audio.controls = true;
+                    audio.src = src;
+                    imgTd.parentNode.replaceChild(audio, imgTd);
+                    popup._contentNode.classList.add('media');
+                    setTimeout(function() {
+                        popup.setContent(tempDiv.innerHTML);
+                        popup.update();
+                    }, 10);
+                } else if (/\.(mp4|webm|ogg|mov)$/i.test(src)) {
+                    var video = document.createElement('video');
+                    video.controls = true;
+                    video.src = src;
+                    video.style.width = "400px";
+                    video.style.height = "300px";
+                    video.style.maxHeight = "60vh";
+                    video.style.maxWidth = "60vw";
+                    imgTd.parentNode.replaceChild(video, imgTd);
+                    popup._contentNode.classList.add('media');
+                    // Aggiorna il popup quando il video carica i metadati
+                    video.addEventListener('loadedmetadata', function() {
+                        popup.update();
+                    });
+                    setTimeout(function() {
+                        popup.setContent(tempDiv.innerHTML);
+                        popup.update();
+                    }, 10);
+                } else {
+                    popup._contentNode.classList.remove('media');
+                }
+            } else {
+                popup._contentNode.classList.remove('media');
+            }
+        }
+		
+		
+		// title settings
+        var title = new L.Control({'position':'topright'});
+        title.onAdd = function (map) {
+            this._div = L.DomUtil.create('div', 'info');
+            this.update();
+            return this._div;
+        };
+        title.update = function () {
+            this._div.innerHTML = '<h2>Healthcare accessibility in Southwest Finland</h2>';
+        };
+        title.addTo(map);
+		
+		// abstrat settings
+        var abstract = new L.Control({'position':'bottomleft'});
+        abstract.onAdd = function (map) {
+            this._div = L.DomUtil.create('div',
+            'leaflet-control abstract');
+            this._div.id = 'abstract'
+                this._div.setAttribute("onmouseenter", "abstract.show()");
+                this._div.setAttribute("onmouseleave", "abstract.hide()");
+                this.hide();
+                return this._div;
+            };
+            abstract.hide = function () {
+                this._div.classList.remove("abstractUncollapsed");
+                this._div.classList.add("abstract");
+                this._div.innerHTML = 'i'
+            }
+			abstract.show = function () {
+				this._div.classList.remove("abstract");
+				this._div.classList.add("abstractUncollapsed");
+				this._div.innerHTML = `
+					<b>About:</b>
+					This web map visualizes travel time accessibility to healthcare in Southwest Finland. Users can explore how access varies by selecting either hospitals or health centres and by choosing between car and walking modes.<br><br>
+		
+					<b>Background:</b>
+					This web map was produced as part of the MAAN7771 Geospatial Data Management and Visualization course at the University of Turku in 2025.<br><br>
+	
+					<b>Data and methods:</b>
+					Service point data were obtained from the Regional Council of Southwest Finland, and the Digiroad road network (Finnish Transport Infrastructure Agency) was used as the network dataset for travel-time analysis. Isochrones were calculated in QGIS using the QNEAT3 plugin at five-minute intervals for both travel modes.<br><br>
+					
+					<b>Data sources:</b><br>
+					Digiroad (2022) © Finnish Transport Infrastructure Agency<br>
+					Service point data of Southwest Finland and Satakunta (2021) © Regional Council of Southwest Finland<br><br>
+					<b>Authors:</b>
+					<img src="images/brezeln.png" alt="Brezeln logo" style="height:20px;vertical-align:middle;margin-right:3px;">
+					Brezeln group, University of Turku, 2025.<br><br>
+
+					<div style="display:flex;justify-content:center;align-items:center;gap:25px;margin-top:10px;flex-wrap:wrap;">
+						<img src="images/lounaistieto.png" alt="Lounaistieto" style="height:38px;">
+						<img src="images/utu.png" alt="University of Turku" style="height:38px;">
+						<img src="images/vsl.png" alt="Varsinais-Suomen liitto" style="height:38px;">
+					</div>
+				`;
+			};
+        abstract.addTo(map);
+		
+		// zoom control buttons
+        var zoomControl = L.control.zoom({
+            position: 'topleft'
+        }).addTo(map);
+	
+		
+        var bounds_group = new L.featureGroup([]);
+        function setBounds() {
+            if (bounds_group.getLayers().length) {
+                map.fitBounds(bounds_group.getBounds());
+            }
+        }
+		
+		// basemap settings
+        map.createPane('pane_CartoDBPositron_1');
+        map.getPane('pane_CartoDBPositron_1').style.zIndex = 401;
+        var layer_CartoDBPositron_1 = L.tileLayer('https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
+            pane: 'pane_CartoDBPositron_1',
+            opacity: 1.0,
+            attribution: '<a href="https://carto.com/">© OpenStreetMap contributors © CARTO</a>',
+            minZoom: 3,
+            maxZoom: 20,
+            minNativeZoom: 0,
+            maxNativeZoom: 18
+        });
+        layer_CartoDBPositron_1;
+        map.addLayer(layer_CartoDBPositron_1);
+		
+		
+        function pop_Healthcentersbycar_2(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature, (I commented these out so isochrones dont change colours)
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">Travel time (min)</th>\
+                        <td class="visible-with-data" id="traveltime">' + (feature.properties['traveltime'] !== null ? autolinker.link(String(feature.properties['traveltime']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Healthcentersbycar_2_0(feature) {
+            if (feature.properties['traveltime'] >= 0.000000 && feature.properties['traveltime'] <= 5.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(26,152,80,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(26,152,80,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 5.000000 && feature.properties['traveltime'] <= 10.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(137,196,91,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(145,207,96,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 10.000000 && feature.properties['traveltime'] <= 20.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(204,224,147,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(217,239,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 20.000000 && feature.properties['traveltime'] <= 30.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(254,224,139,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(254,224,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 30.000000 && feature.properties['traveltime'] <= 45.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(244,109,67,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(244,109,67,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 45.000000 && feature.properties['traveltime'] <= 60.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbycar_2',
+                opacity: 1,
+                color: 'rgba(215,48,39,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(215,48,39,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+        }
+        map.createPane('pane_Healthcentersbycar_2');
+        map.getPane('pane_Healthcentersbycar_2').style.zIndex = 402;
+        map.getPane('pane_Healthcentersbycar_2').style['mix-blend-mode'] = 'normal';
+        var layer_Healthcentersbycar_2 = new L.geoJson(json_Healthcentersbycar_2, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_Healthcentersbycar_2',
+            layerName: 'layer_Healthcentersbycar_2',
+            pane: 'pane_Healthcentersbycar_2',
+            onEachFeature: pop_Healthcentersbycar_2,
+            style: style_Healthcentersbycar_2_0,
+        });
+        bounds_group.addLayer(layer_Healthcentersbycar_2);
+        map.addLayer(layer_Healthcentersbycar_2);
+        function pop_Healthcentersbywalking_3(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature,   (I commented these out so the isochrones dont change colours))
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">Travel time (min)</th>\
+                        <td class="visible-with-data" id="traveltime">' + (feature.properties['traveltime'] !== null ? autolinker.link(String(feature.properties['traveltime']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Healthcentersbywalking_3_0(feature) {
+            if (feature.properties['traveltime'] >= 0.000000 && feature.properties['traveltime'] <= 5.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(26,152,80,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(26,152,80,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 5.000000 && feature.properties['traveltime'] <= 10.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(137,196,91,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(145,207,96,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 10.000000 && feature.properties['traveltime'] <= 20.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(204,224,147,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(217,239,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 20.000000 && feature.properties['traveltime'] <= 30.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(254,224,139,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(254,224,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 30.000000 && feature.properties['traveltime'] <= 45.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(244,109,67,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(244,109,67,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 45.000000 && feature.properties['traveltime'] <= 60.000000 ) {
+                return {
+                pane: 'pane_Healthcentersbywalking_3',
+                opacity: 1,
+                color: 'rgba(215,48,39,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(215,48,39,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+        }
+        map.createPane('pane_Healthcentersbywalking_3');
+        map.getPane('pane_Healthcentersbywalking_3').style.zIndex = 403;
+        map.getPane('pane_Healthcentersbywalking_3').style['mix-blend-mode'] = 'normal';
+        var layer_Healthcentersbywalking_3 = new L.geoJson(json_Healthcentersbywalking_3, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_Healthcentersbywalking_3',
+            layerName: 'layer_Healthcentersbywalking_3',
+            pane: 'pane_Healthcentersbywalking_3',
+            onEachFeature: pop_Healthcentersbywalking_3,
+            style: style_Healthcentersbywalking_3_0,
+        });
+        bounds_group.addLayer(layer_Healthcentersbywalking_3);
+        map.addLayer(layer_Healthcentersbywalking_3);
+        function pop_Hospitalsbywalking_4(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">Travel time (min)</th>\
+                        <td class="visible-with-data" id="traveltime">' + (feature.properties['traveltime'] !== null ? autolinker.link(String(feature.properties['traveltime']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Hospitalsbywalking_4_0(feature) {
+            if (feature.properties['traveltime'] >= 0.000000 && feature.properties['traveltime'] <= 5.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(26,152,80,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(26,152,80,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 5.000000 && feature.properties['traveltime'] <= 10.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(137,196,91,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(145,207,96,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 10.000000 && feature.properties['traveltime'] <= 20.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(204,224,147,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(217,239,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 20.000000 && feature.properties['traveltime'] <= 30.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(254,224,139,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(254,224,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 30.000000 && feature.properties['traveltime'] <= 45.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(244,109,67,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(244,109,67,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['traveltime'] >= 45.000000 && feature.properties['traveltime'] <= 60.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbywalking_4',
+                opacity: 1,
+                color: 'rgba(215,48,39,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(215,48,39,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+        }
+        map.createPane('pane_Hospitalsbywalking_4');
+        map.getPane('pane_Hospitalsbywalking_4').style.zIndex = 404;
+        map.getPane('pane_Hospitalsbywalking_4').style['mix-blend-mode'] = 'normal';
+        var layer_Hospitalsbywalking_4 = new L.geoJson(json_Hospitalsbywalking_4, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_Hospitalsbywalking_4',
+            layerName: 'layer_Hospitalsbywalking_4',
+            pane: 'pane_Hospitalsbywalking_4',
+            onEachFeature: pop_Hospitalsbywalking_4,
+            style: style_Hospitalsbywalking_4_0,
+        });
+        bounds_group.addLayer(layer_Hospitalsbywalking_4);
+        map.addLayer(layer_Hospitalsbywalking_4);
+        function pop_Hospitalsbycar_5(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">Travel time (min)</th>\
+                        <td class="visible-with-data" id="Traveltime">' + (feature.properties['Traveltime'] !== null ? autolinker.link(String(feature.properties['Traveltime']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Hospitalsbycar_5_0(feature) {
+            if (feature.properties['Traveltime'] >= 0.000000 && feature.properties['Traveltime'] <= 5.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(26,152,80,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(26,152,80,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['Traveltime'] >= 5.000000 && feature.properties['Traveltime'] <= 10.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(137,196,91,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(145,207,96,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['Traveltime'] >= 10.000000 && feature.properties['Traveltime'] <= 20.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(204,224,147,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(217,239,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['Traveltime'] >= 20.000000 && feature.properties['Traveltime'] <= 30.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(254,224,139,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(254,224,139,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['Traveltime'] >= 30.000000 && feature.properties['Traveltime'] <= 45.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(244,109,67,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(244,109,67,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+            if (feature.properties['Traveltime'] >= 45.000000 && feature.properties['Traveltime'] <= 60.000000 ) {
+                return {
+                pane: 'pane_Hospitalsbycar_5',
+                opacity: 1,
+                color: 'rgba(215,48,39,0.25)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1.0, 
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(215,48,39,0.25)',
+                interactive: true,
+				stroke: false,
+            }
+            }
+        }
+        map.createPane('pane_Hospitalsbycar_5');
+        map.getPane('pane_Hospitalsbycar_5').style.zIndex = 405;
+        map.getPane('pane_Hospitalsbycar_5').style['mix-blend-mode'] = 'normal';
+        var layer_Hospitalsbycar_5 = new L.geoJson(json_Hospitalsbycar_5, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_Hospitalsbycar_5',
+            layerName: 'layer_Hospitalsbycar_5',
+            pane: 'pane_Hospitalsbycar_5',
+            onEachFeature: pop_Hospitalsbycar_5,
+            style: style_Hospitalsbycar_5_0,
+        });
+        bounds_group.addLayer(layer_Hospitalsbycar_5);
+        map.addLayer(layer_Hospitalsbycar_5);
+        function pop_Hospitals_6(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">services</th>\
+                        <td class="visible-with-data" id="services">' + (feature.properties['services'] !== null ? autolinker.link(String(feature.properties['services']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Name</th>\
+                        <td class="visible-with-data" id="name">' + (feature.properties['name'] !== null ? autolinker.link(String(feature.properties['name']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Phone number</th>\
+                        <td class="visible-with-data" id="phone_num">' + (feature.properties['phone_num'] !== null ? autolinker.link(String(feature.properties['phone_num']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Address</th>\
+                        <td class="visible-with-data" id="address">' + (feature.properties['address'] !== null ? autolinker.link(String(feature.properties['address']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">E-mail</th>\
+                        <td class="visible-with-data" id="email">' + (feature.properties['email'] !== null ? autolinker.link(String(feature.properties['email']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Website</th>\
+                        <td class="visible-with-data" id="web_pages">' + (feature.properties['web_pages'] !== null ? autolinker.link(String(feature.properties['web_pages']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Opening hours</th>\
+                        <td class="visible-with-data" id="opening_hours">' + (feature.properties['opening_hours'] !== null ? autolinker.link(String(feature.properties['opening_hours']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Hospitals_6_0() {
+            return {
+                pane: 'pane_Hospitals_6',
+                radius: 4.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(231,113,72,1.0)',
+                interactive: true,
+            }
+        }
+        map.createPane('pane_Hospitals_6');
+        map.getPane('pane_Hospitals_6').style.zIndex = 406;
+        map.getPane('pane_Hospitals_6').style['mix-blend-mode'] = 'normal';
+        var layer_Hospitals_6 = new L.geoJson(json_Hospitals_6, {
+            attribution: '<a href="https://www.avoindata.fi/data/en_GB/dataset/varsinais-suomen-ja-satakunnan-palvelupisteet">© Regional Council of Southwest Finland</a>',
+            interactive: true,
+            dataVar: 'json_Hospitals_6',
+            layerName: 'layer_Hospitals_6',
+            pane: 'pane_Hospitals_6',
+            onEachFeature: pop_Hospitals_6,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.marker(latlng, {icon: hospitalIcon});
+            },
+        });
+        bounds_group.addLayer(layer_Hospitals_6);
+        map.addLayer(layer_Hospitals_6);
+        function pop_Healthcenters_7(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                //mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">Name</th>\
+                        <td class="visible-with-data" id="name">' + (feature.properties['name'] !== null ? autolinker.link(String(feature.properties['name']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Phone number</th>\
+                        <td class="visible-with-data" id="phone_num">' + (feature.properties['phone_num'] !== null ? autolinker.link(String(feature.properties['phone_num']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Address</th>\
+                        <td class="visible-with-data" id="address">' + (feature.properties['address'] !== null ? autolinker.link(String(feature.properties['address']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">E-mail</th>\
+                        <td class="visible-with-data" id="email">' + (feature.properties['email'] !== null ? autolinker.link(String(feature.properties['email']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Website</th>\
+                        <td class="visible-with-data" id="web_pages">' + (feature.properties['web_pages'] !== null ? autolinker.link(String(feature.properties['web_pages']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Opening hours</th>\
+                        <td class="visible-with-data" id="opening_ho">' + (feature.properties['opening_ho'] !== null ? autolinker.link(String(feature.properties['opening_ho']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_Healthcenters_7_0() {
+            return {
+                pane: 'pane_Healthcenters_7',
+                radius: 4.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(13,8,135,1.0)',
+                interactive: true,
+            }
+        }
+        map.createPane('pane_Healthcenters_7');
+        map.getPane('pane_Healthcenters_7').style.zIndex = 407;
+        map.getPane('pane_Healthcenters_7').style['mix-blend-mode'] = 'normal';
+        var layer_Healthcenters_7 = new L.geoJson(json_Healthcenters_7, {
+            attribution: '<a href="https://www.avoindata.fi/data/en_GB/dataset/varsinais-suomen-ja-satakunnan-palvelupisteet"> © Regional Council of Southwest Finland</a>',
+            interactive: true,
+            dataVar: 'json_Healthcenters_7',
+            layerName: 'layer_Healthcenters_7',
+            pane: 'pane_Healthcenters_7',
+            onEachFeature: pop_Healthcenters_7,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.marker(latlng, {icon: healthCenterIcon});
+            },
+        });
+        bounds_group.addLayer(layer_Healthcenters_7);
+        map.addLayer(layer_Healthcenters_7);
+       
+		// Zooms in when clicking a point
+		layer_Hospitals_6.on('click', function (e) {
+			map.setView(e.latlng, 12, {animate: true});
+			e.layer.openPopup();
+		});
+
+		layer_Healthcenters_7.on('click', function (e) {
+			map.setView(e.latlng, 12, {animate: true});
+			e.layer.openPopup();
+		});
+		
+		// enlarges icons with function that we defined earlier
+		layer_Hospitals_6.eachLayer(function(marker) {
+			enlargeicons(marker);
+		});
+		layer_Healthcenters_7.eachLayer(function(marker) {
+			enlargeicons(marker);
+		});
+
+        setBounds();
+		
+		
+		
+        </script>
+        <!-- Dropdown menus for travel mode and destination (USE OF AI NOTE: I used chatgpt for making the "base" of the code here, but I tested different parameters and edited it myself -->
+        <div id="controls" style="
+          position: absolute;
+          top: 10px;
+          left: 70px;
+          z-index: 1000;
+          background: white;
+          padding: 10px;
+          border-radius: 6px;
+          box-shadow: 0 0 5px rgba(0,0,0,0.3);
+          font-family: sans-serif;
+          font-size: 13px;
+        ">
+          <label>Travel mode:</label>
+          <select id="modeSelect">
+            <option value="car">By car</option>
+            <option value="walk">By walking</option>
+          </select><br>
+          <label>Destination:</label>
+          <select id="destSelect">
+            <option value="hospital">Hospitals</option>
+            <option value="center">Health centers</option>
+          </select>
+        </div>
+        <script>
+		
+		<!-- function for layer settings -->
+        function updateLayers() {
+            var mode = document.getElementById('modeSelect').value;
+            var dest = document.getElementById('destSelect').value;
+
+            // Hides all the layers before showing the selected ones
+            map.removeLayer(layer_Hospitalsbycar_5);
+            map.removeLayer(layer_Hospitalsbywalking_4);
+            map.removeLayer(layer_Healthcentersbycar_2);
+            map.removeLayer(layer_Healthcentersbywalking_3);
+            map.removeLayer(layer_Hospitals_6);
+            map.removeLayer(layer_Healthcenters_7);
+
+            // The layers are shown with different configurations of the settings
+            if (dest === 'hospital' && mode === 'car') {
+                map.addLayer(layer_Hospitalsbycar_5);
+                map.addLayer(layer_Hospitals_6);
+            }
+            if (dest === 'hospital' && mode === 'walk') {
+                map.addLayer(layer_Hospitalsbywalking_4);
+                map.addLayer(layer_Hospitals_6);
+            }
+            if (dest === 'center' && mode === 'car') {
+                map.addLayer(layer_Healthcentersbycar_2);
+                map.addLayer(layer_Healthcenters_7);
+            }
+            if (dest === 'center' && mode === 'walk') {
+                map.addLayer(layer_Healthcentersbywalking_3);
+                map.addLayer(layer_Healthcenters_7);
+            }
+        }
+
+        // Event listeners for both selectors
+        document.getElementById('modeSelect').addEventListener('change', updateLayers);
+        document.getElementById('destSelect').addEventListener('change', updateLayers);
+
+        // Run on page load
+        updateLayers();
+        </script>
+		
+		
+		<script>
+		// Leaflet legend control
+		var legend = L.control({ position: 'bottomright' });
+
+		legend.onAdd = function (map) {
+			var div = L.DomUtil.create('div', 'info legend');
+			div.innerHTML =
+				'<b>Travel time (minutes)</b><br>' +
+				'<i style="background:#1a9850;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>0–5<br>' +
+				'<i style="background:#91cf60;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>5–10<br>' +
+				'<i style="background:#d9ef8b;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>10–20<br>' +
+				'<i style="background:#fee08b;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>20–30<br>' +
+				'<i style="background:#f46d43;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>30–45<br>' +
+				'<i style="background:#d73027;width:18px;height:10px;display:inline-block;margin-right:6px;border:1px solid #888;"></i>45–60';
+			return div;
+		};
+
+		legend.addTo(map);
+		</script>
+		
+		
+		<!-- help button for guided tour-->		
+		<button id="tutorialButton" style="
+		  position:absolute;
+		  top:50px;
+		  right:10px;
+		  z-index:2000;
+		  background:#fff;
+		  border:1px solid #888;
+		  border-radius:6px;
+		  padding:6px 10px;
+		  font-size:13px;
+		  cursor:pointer;
+		  box-shadow:0 1px 4px rgba(0,0,0,0.3);
+		">? Help</button>
+
+
+
+		<!-- Intro.js guided tour-->
+		<script>
+		// Triggers Intro.js guided tour when the "Help" button is clicked (https://introjs.com/docs/tour/examples/html-tooltip)
+		document.getElementById('tutorialButton').addEventListener('click', function() {
+		  introJs().setOptions({
+			steps: [
+			  {
+				intro: "Welcome to the Healthcare Accessibility Map! 👋<br>This short tutorial will guide you through the key features." // welcome meggage
+			  },
+			  {
+				element: document.querySelector('#modeSelect'),  // mode selector
+				intro: "Here you can choose the travel mode (car or walking)."
+			  },
+			  {
+				element: document.querySelector('#destSelect'), // destnation selector
+				intro: "And here you can select whether to view accessibility to hospitals or health centers."
+			  },
+			  {
+				element: document.querySelector('.leaflet-control-zoom'), // zoom control
+				intro: "Use these buttons to zoom in and out on the map."
+			  },
+			  {
+				element: document.querySelector('.leaflet-control-locate'), // locate me button
+				intro: "Click this button to locate yourself on the map (requires browser permission)."
+			  },
+			  {
+				element: document.querySelector('#abstract'), // abstract button
+				intro: "Hover over this 'i' icon to see background information about the project."
+			  },
+			  {
+			  intro: 'You can also click the hospital (<img src="markers/hospital.png" style="width:20px;vertical-align:middle;">) or the health center (<img src="markers/healthcenter.png" style="width:20px;vertical-align:middle;"> ) icons to see detailed information, or click the coloured map areas to get a more precise travel time estimate.' // popup info
+			  },
+			  {
+				intro: "That's all! You can now explore the map freely. Click 'Finish' to close this tutorial." // ending
+			  }
+			],
+			
+			// settings: https://introjs.com/docs/tour/options
+			showStepNumbers: false,
+			exitOnOverlayClick: true,
+			showProgress: true,
+			hidePrev: true,
+			nextLabel: "Next →",
+			prevLabel: "← Back",
+			doneLabel: "Finish"
+		  }).start();
+		});
+		</script>
+
+
+    </body>
+</html>
+
